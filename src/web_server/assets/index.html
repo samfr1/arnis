@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Arnis Global — Admin Panel</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  :root {
+    --grid: 4px;
+    --bg: #0e0f12;
+    --surface: #16181d;
+    --surface-2: #1f232a;
+    --border: #2a2f38;
+    --fg: #e6e8eb;
+    --fg-muted: #9aa3ad;
+    --accent: #6ea8ff;
+    --good: #4cb78a;
+    --bad: #e16060;
+    --warn: #d4a44a;
+    --running: #4f8af5;
+  }
+  html[data-theme="light"] {
+    --bg: #f7f8fa;
+    --surface: #ffffff;
+    --surface-2: #eef0f4;
+    --border: #d6dae0;
+    --fg: #1c1e22;
+    --fg-muted: #5a6470;
+    --accent: #2563eb;
+    --good: #2f8e60;
+    --bad: #c44545;
+    --warn: #b8862c;
+    --running: #2563eb;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  header.bar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: calc(var(--grid)*3) calc(var(--grid)*4);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .logo {
+    font-weight: 700; letter-spacing: 0.12em; font-size: 14px;
+  }
+  .pill {
+    display: inline-block; padding: calc(var(--grid)*1) calc(var(--grid)*2);
+    border-radius: 999px; font-size: 11px; text-transform: uppercase;
+    border: 1px solid var(--border); background: var(--surface-2);
+    color: var(--fg-muted);
+  }
+  .pill.running   { background: var(--running); color: #fff; border-color: transparent; }
+  .pill.paused    { background: var(--warn);    color: #1a1a1a; border-color: transparent; }
+  .pill.done      { background: var(--good);    color: #fff; border-color: transparent; }
+  .pill.failed    { background: var(--bad);     color: #fff; border-color: transparent; }
+  .pill.canceled  { background: #555;           color: #fff; border-color: transparent; }
+  .pill.pending   { background: var(--surface-2); color: var(--fg-muted); }
+
+  main {
+    display: grid; gap: calc(var(--grid)*4);
+    padding: calc(var(--grid)*4);
+    max-width: 1400px; margin: 0 auto;
+  }
+  section.card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: calc(var(--grid)*2);
+    padding: calc(var(--grid)*4);
+  }
+  section.card h2 {
+    margin: 0 0 calc(var(--grid)*3) 0; font-size: 12px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--fg-muted); font-weight: 600;
+  }
+
+  .row { display: flex; gap: calc(var(--grid)*2); flex-wrap: wrap; align-items: center; }
+  .row.tight { gap: calc(var(--grid)*1); }
+  label { color: var(--fg-muted); font-size: 12px; display: block; margin-bottom: calc(var(--grid)*1); }
+
+  input[type="text"], input[type="number"] {
+    background: var(--surface-2); color: var(--fg);
+    border: 1px solid var(--border); border-radius: calc(var(--grid)*1);
+    padding: calc(var(--grid)*2) calc(var(--grid)*2);
+    font-family: inherit; font-size: 12px; min-width: 90px;
+  }
+  input[type="range"] { width: 200px; }
+
+  button {
+    background: var(--surface-2); color: var(--fg);
+    border: 1px solid var(--border); border-radius: calc(var(--grid)*1);
+    padding: calc(var(--grid)*2) calc(var(--grid)*4);
+    font-family: inherit; font-size: 12px; cursor: pointer;
+  }
+  button.primary { background: var(--accent); color: #fff; border-color: transparent; }
+  button.warn { background: var(--warn); color: #1a1a1a; border-color: transparent; }
+  button.danger { background: var(--bad); color: #fff; border-color: transparent; }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  details { margin-top: calc(var(--grid)*3); }
+  details > summary { cursor: pointer; color: var(--fg-muted); font-size: 12px; }
+
+  #map { height: 360px; border-radius: calc(var(--grid)*1); border: 1px solid var(--border); }
+
+  .grid-tiles {
+    display: grid; gap: 2px; max-width: 100%;
+    overflow: auto; padding: 2px; background: var(--surface-2);
+    border-radius: calc(var(--grid)*1); max-height: 320px;
+  }
+  .tile {
+    width: 14px; height: 14px; border-radius: 2px;
+    background: var(--surface);
+    position: relative;
+  }
+  .tile[data-status="pending"]  { background: #2c313a; }
+  .tile[data-status="running"]  { background: var(--running); animation: pulse 1.4s infinite; }
+  .tile[data-status="done"]     { background: var(--good); }
+  .tile[data-status="failed"]   { background: var(--bad); }
+  .tile[data-status="canceled"] { background: #1a1c20; }
+  @keyframes pulse {
+    0%,100% { opacity: 1.0; }
+    50%     { opacity: 0.55; }
+  }
+  .tile:hover::after {
+    content: attr(data-tooltip);
+    position: absolute; left: 18px; top: 0;
+    background: var(--surface); color: var(--fg);
+    border: 1px solid var(--border); padding: 4px 8px;
+    font-size: 11px; white-space: pre; z-index: 5;
+    border-radius: 4px; pointer-events: none;
+  }
+
+  .stats { display: flex; gap: calc(var(--grid)*6); flex-wrap: wrap; align-items: center; font-size: 12px; }
+  .stats .num { font-size: 16px; color: var(--fg); }
+  .stats .lbl { color: var(--fg-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+  progress { width: 200px; height: 8px; }
+
+  pre.log {
+    background: #000; color: #d8dde6;
+    height: 240px; overflow: auto; margin: 0;
+    padding: calc(var(--grid)*2);
+    font-size: 11.5px; line-height: 1.4;
+    border-radius: calc(var(--grid)*1);
+  }
+  html[data-theme="light"] pre.log { background: #1a1c1f; color: #e6e8eb; }
+
+  .err { color: var(--bad); margin-top: calc(var(--grid)*2); font-size: 12px; min-height: 1em; }
+  .hidden { display: none !important; }
+
+  .btn-row { display: flex; gap: calc(var(--grid)*2); flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<header class="bar">
+  <div class="logo">ARNIS GLOBAL</div>
+  <div class="row tight">
+    <span id="status-badge" class="pill pending">no job</span>
+    <button id="theme-toggle" title="Toggle theme">◐</button>
+  </div>
+</header>
+
+<main>
+  <section id="setup-card" class="card">
+    <h2>Setup</h2>
+    <div class="row" style="align-items: stretch;">
+      <div style="flex: 1 1 600px; min-width: 320px;">
+        <label>Bounding box (draw rectangle on map, or enter manually)</label>
+        <div id="map"></div>
+      </div>
+      <div style="flex: 1 1 320px; min-width: 280px; display: grid; gap: calc(var(--grid)*3); align-content: start;">
+        <div class="row">
+          <div><label>min_lat</label><input id="bb-min-lat" type="number" step="any" /></div>
+          <div><label>min_lng</label><input id="bb-min-lng" type="number" step="any" /></div>
+        </div>
+        <div class="row">
+          <div><label>max_lat</label><input id="bb-max-lat" type="number" step="any" /></div>
+          <div><label>max_lng</label><input id="bb-max-lng" type="number" step="any" /></div>
+        </div>
+        <div>
+          <label>Tile size (km) — <span id="tile-size-label">5</span></label>
+          <input id="tile-size" type="range" min="1" max="50" value="5" step="1" />
+        </div>
+        <div>
+          <label>Minecraft world folder (absolute path)</label>
+          <input id="world-path" type="text" style="width: 100%;" placeholder="/home/user/.minecraft/saves/MyWorld" />
+        </div>
+        <details>
+          <summary>Advanced settings</summary>
+          <div class="row" style="margin-top: 8px;">
+            <label><input id="opt-terrain" type="checkbox" /> terrain</label>
+            <label><input id="opt-interior" type="checkbox" checked /> interiors</label>
+            <label><input id="opt-roof" type="checkbox" checked /> roofs</label>
+            <label><input id="opt-fillground" type="checkbox" /> fill ground</label>
+            <label><input id="opt-landcover" type="checkbox" checked /> land cover</label>
+          </div>
+          <div class="row" style="margin-top: 8px;">
+            <div><label>scale</label><input id="opt-scale" type="number" step="0.1" value="1" /></div>
+          </div>
+        </details>
+        <button id="btn-create" class="primary">Create Job &amp; Backup World</button>
+        <div id="setup-err" class="err"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="control-card" class="card hidden">
+    <h2>Control</h2>
+    <div class="btn-row">
+      <button id="btn-start"   class="primary">Start</button>
+      <button id="btn-pause">Pause</button>
+      <button id="btn-resume">Resume</button>
+      <button id="btn-cancel"  class="danger">Cancel</button>
+      <button id="btn-restore" class="warn">Restore Backup</button>
+    </div>
+    <div id="control-err" class="err"></div>
+  </section>
+
+  <section id="progress-card" class="card hidden">
+    <h2>Tile Grid</h2>
+    <div id="tile-grid" class="grid-tiles"></div>
+  </section>
+
+  <section id="stats-card" class="card hidden">
+    <h2>Stats</h2>
+    <div class="stats">
+      <div><div class="lbl">Done</div><div class="num"><span id="stat-done">0</span> / <span id="stat-total">0</span></div></div>
+      <div><div class="lbl">Progress</div><progress id="stat-progress" value="0" max="100"></progress> <span id="stat-pct">0%</span></div>
+      <div><div class="lbl">Elapsed</div><div class="num" id="stat-elapsed">00:00:00</div></div>
+      <div><div class="lbl">ETA</div><div class="num" id="stat-eta">—</div></div>
+      <div><div class="lbl">Failed</div><div class="num" id="stat-failed">0</div></div>
+    </div>
+  </section>
+
+  <section id="log-card" class="card hidden">
+    <div class="row" style="justify-content: space-between;">
+      <h2 style="margin: 0;">Log</h2>
+      <button id="btn-log-clear">Clear</button>
+    </div>
+    <pre id="log" class="log"></pre>
+  </section>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  // ---------- Theme ----------
+  const themeBtn = document.getElementById('theme-toggle');
+  themeBtn.addEventListener('click', () => {
+    const cur = document.documentElement.getAttribute('data-theme');
+    document.documentElement.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
+  });
+
+  // ---------- Map ----------
+  const map = L.map('map').setView([48.137, 11.575], 11);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '© OpenStreetMap'
+  }).addTo(map);
+  let drawnRect = null;
+  let dragStart = null;
+
+  function applyBboxToInputs(b) {
+    document.getElementById('bb-min-lat').value = b.min_lat.toFixed(6);
+    document.getElementById('bb-min-lng').value = b.min_lng.toFixed(6);
+    document.getElementById('bb-max-lat').value = b.max_lat.toFixed(6);
+    document.getElementById('bb-max-lng').value = b.max_lng.toFixed(6);
+  }
+
+  // Shift+drag to draw a rectangle.
+  map.on('mousedown', (e) => {
+    if (!e.originalEvent.shiftKey) return;
+    map.dragging.disable();
+    dragStart = e.latlng;
+    if (drawnRect) { map.removeLayer(drawnRect); drawnRect = null; }
+  });
+  map.on('mousemove', (e) => {
+    if (!dragStart) return;
+    const bounds = L.latLngBounds(dragStart, e.latlng);
+    if (drawnRect) map.removeLayer(drawnRect);
+    drawnRect = L.rectangle(bounds, { color: '#6ea8ff', weight: 1 }).addTo(map);
+  });
+  map.on('mouseup', (e) => {
+    if (!dragStart) return;
+    const bounds = L.latLngBounds(dragStart, e.latlng);
+    dragStart = null;
+    map.dragging.enable();
+    applyBboxToInputs({
+      min_lat: bounds.getSouth(),
+      min_lng: bounds.getWest(),
+      max_lat: bounds.getNorth(),
+      max_lng: bounds.getEast()
+    });
+  });
+  // Hint to user
+  L.control({position: 'topright'}).onAdd = function() {
+    const div = L.DomUtil.create('div');
+    div.style.background = 'rgba(0,0,0,0.55)';
+    div.style.color = '#fff';
+    div.style.padding = '4px 8px';
+    div.style.fontSize = '11px';
+    div.style.borderRadius = '4px';
+    div.innerText = 'shift+drag to select bbox';
+    return div;
+  };
+
+  // ---------- Tile size slider ----------
+  const tileSize = document.getElementById('tile-size');
+  const tileSizeLabel = document.getElementById('tile-size-label');
+  tileSize.addEventListener('input', () => tileSizeLabel.innerText = tileSize.value);
+
+  // ---------- API helpers ----------
+  async function api(path, opts = {}) {
+    const resp = await fetch(path, {
+      method: opts.method || 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    });
+    let body = null;
+    try { body = await resp.json(); } catch { body = {}; }
+    if (!resp.ok) throw new Error(body.error || `${resp.status} ${resp.statusText}`);
+    return body;
+  }
+
+  // ---------- State ----------
+  let manifest = null;
+  let jobStartMs = null;
+
+  function setBadge(status) {
+    const el = document.getElementById('status-badge');
+    el.className = 'pill ' + (status || 'pending');
+    el.innerText = status || 'no job';
+  }
+
+  function fmtDuration(secs) {
+    if (!isFinite(secs) || secs < 0) return '—';
+    secs = Math.floor(secs);
+    const h = String(Math.floor(secs / 3600)).padStart(2, '0');
+    const m = String(Math.floor((secs % 3600) / 60)).padStart(2, '0');
+    const s = String(secs % 60).padStart(2, '0');
+    return `${h}:${m}:${s}`;
+  }
+
+  function renderManifest(m) {
+    manifest = m;
+    if (!m) {
+      setBadge('pending');
+      document.getElementById('setup-card').classList.remove('hidden');
+      document.getElementById('control-card').classList.add('hidden');
+      document.getElementById('progress-card').classList.add('hidden');
+      document.getElementById('stats-card').classList.add('hidden');
+      document.getElementById('log-card').classList.add('hidden');
+      return;
+    }
+    setBadge(m.status);
+    const isTerminal = m.status === 'done' || m.status === 'canceled' || m.status === 'failed';
+    document.getElementById('setup-card').classList.toggle('hidden', !isTerminal && m.status !== 'pending' ? true : false);
+    if (isTerminal) document.getElementById('setup-card').classList.remove('hidden');
+    document.getElementById('control-card').classList.remove('hidden');
+    document.getElementById('progress-card').classList.remove('hidden');
+    document.getElementById('stats-card').classList.remove('hidden');
+    document.getElementById('log-card').classList.remove('hidden');
+
+    // Buttons
+    document.getElementById('btn-start').disabled  = m.status === 'running' || m.status === 'paused';
+    document.getElementById('btn-pause').disabled  = m.status !== 'running';
+    document.getElementById('btn-resume').disabled = m.status !== 'paused';
+    document.getElementById('btn-cancel').disabled = m.status !== 'running' && m.status !== 'paused';
+    document.getElementById('btn-restore').disabled = m.status === 'running' || !m.backup_path;
+
+    renderTiles(m);
+    renderStats(m);
+    if (m.started_at) jobStartMs = m.started_at * 1000;
+  }
+
+  function renderTiles(m) {
+    const grid = document.getElementById('tile-grid');
+    const rows = m.tiles.reduce((a, t) => Math.max(a, t.task.row), 0) + 1;
+    const cols = m.tiles.reduce((a, t) => Math.max(a, t.task.col), 0) + 1;
+    grid.style.gridTemplateColumns = `repeat(${cols}, 14px)`;
+    grid.innerHTML = '';
+    // Place by row/col
+    const byRC = new Map(m.tiles.map(t => [`${t.task.row}/${t.task.col}`, t]));
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const t = byRC.get(`${r}/${c}`);
+        const div = document.createElement('div');
+        div.className = 'tile';
+        if (t) {
+          div.dataset.status = t.status;
+          const dur = (t.started_at && t.finished_at) ? (t.finished_at - t.started_at) : '—';
+          const bb = t.task.bbox;
+          div.dataset.tooltip = `${t.task.id}\n${t.status}\nbbox: ${bb.min_lat.toFixed(4)},${bb.min_lng.toFixed(4)},${bb.max_lat.toFixed(4)},${bb.max_lng.toFixed(4)}\nduration: ${dur}s${t.error ? `\nerror: ${t.error}` : ''}`;
+        } else {
+          div.dataset.status = 'canceled';
+        }
+        grid.appendChild(div);
+      }
+    }
+  }
+
+  function renderStats(m) {
+    document.getElementById('stat-done').innerText = m.done;
+    document.getElementById('stat-total').innerText = m.total;
+    document.getElementById('stat-failed').innerText = m.failed;
+    const pct = m.total ? Math.round((m.done / m.total) * 100) : 0;
+    document.getElementById('stat-pct').innerText = pct + '%';
+    document.getElementById('stat-progress').value = pct;
+    // Elapsed + ETA
+    if (jobStartMs) {
+      const elapsed = (Date.now() - jobStartMs) / 1000;
+      document.getElementById('stat-elapsed').innerText = fmtDuration(elapsed);
+      const remaining = m.total - m.done - m.failed - m.canceled;
+      const avg = m.done > 0 ? elapsed / m.done : null;
+      document.getElementById('stat-eta').innerText = avg ? fmtDuration(avg * remaining) : '—';
+    }
+  }
+
+  // Update elapsed every second.
+  setInterval(() => { if (manifest) renderStats(manifest); }, 1000);
+
+  // ---------- Logs ----------
+  const logEl = document.getElementById('log');
+  function appendLog(line) {
+    logEl.textContent += line + '\n';
+    while (logEl.textContent.split('\n').length > 305) {
+      logEl.textContent = logEl.textContent.split('\n').slice(-300).join('\n');
+    }
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  document.getElementById('btn-log-clear').addEventListener('click', () => { logEl.textContent = ''; });
+
+  // ---------- WebSocket ----------
+  function connectWs() {
+    const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/events';
+    const ws = new WebSocket(wsUrl);
+    ws.onmessage = (ev) => {
+      let msg = null;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+      if (!msg || !msg.type) return;
+      switch (msg.type) {
+        case 'log_line':
+          appendLog(msg.data.line);
+          break;
+        case 'tile_start':
+        case 'tile_done':
+        case 'tile_failed':
+        case 'job_paused':
+        case 'job_resumed':
+        case 'job_done':
+        case 'job_canceled':
+        case 'job_started':
+          // Re-fetch full manifest for authoritative state.
+          refreshAll();
+          break;
+      }
+    };
+    ws.onclose = () => setTimeout(connectWs, 1500);
+  }
+
+  async function refreshAll() {
+    try {
+      const s = await api('/api/job/status');
+      renderManifest(s.manifest);
+    } catch (e) { /* ignore */ }
+  }
+
+  async function refreshLogs() {
+    try {
+      const r = await api('/api/logs');
+      logEl.textContent = (r.lines || []).join('\n') + '\n';
+      logEl.scrollTop = logEl.scrollHeight;
+    } catch {}
+  }
+
+  // ---------- Buttons ----------
+  function readBboxInputs() {
+    const v = (id) => parseFloat(document.getElementById(id).value);
+    return [v('bb-min-lat'), v('bb-min-lng'), v('bb-max-lat'), v('bb-max-lng')];
+  }
+
+  document.getElementById('btn-create').addEventListener('click', async () => {
+    const errEl = document.getElementById('setup-err');
+    errEl.textContent = '';
+    const bbox = readBboxInputs();
+    if (bbox.some(v => isNaN(v))) { errEl.textContent = 'Please set all four bbox values.'; return; }
+    const wp = document.getElementById('world-path').value.trim();
+    if (!wp) { errEl.textContent = 'Enter the world folder path.'; return; }
+
+    const settings = {
+      terrain:    document.getElementById('opt-terrain').checked,
+      interior:   document.getElementById('opt-interior').checked,
+      roof:       document.getElementById('opt-roof').checked,
+      fillground: document.getElementById('opt-fillground').checked,
+      land_cover: document.getElementById('opt-landcover').checked,
+      scale:      parseFloat(document.getElementById('opt-scale').value) || 1.0,
+      bedrock:    false
+    };
+    try {
+      await api('/api/job/create', { method: 'POST', body: {
+        bbox, tile_size_km: parseFloat(tileSize.value), world_path: wp, settings
+      }});
+      await api('/api/job/start', { method: 'POST' });
+      await refreshAll();
+    } catch (e) { errEl.textContent = e.message; }
+  });
+
+  function controlBtn(id, path, opts = {}) {
+    document.getElementById(id).addEventListener('click', async () => {
+      const errEl = document.getElementById('control-err');
+      errEl.textContent = '';
+      if (opts.confirm && !confirm(opts.confirm)) return;
+      try {
+        await api(path, { method: 'POST' });
+        await refreshAll();
+      } catch (e) { errEl.textContent = e.message; }
+    });
+  }
+  controlBtn('btn-start',  '/api/job/start');
+  controlBtn('btn-pause',  '/api/job/pause');
+  controlBtn('btn-resume', '/api/job/resume');
+  controlBtn('btn-cancel', '/api/job/cancel', { confirm: 'Cancel the current job after the running tile finishes?' });
+  controlBtn('btn-restore','/api/job/restore-backup',
+             { confirm: 'Replace the world folder with its backup? This cannot be undone.' });
+
+  // ---------- Init ----------
+  refreshAll();
+  refreshLogs();
+  connectWs();
+</script>
+</body>
+</html>

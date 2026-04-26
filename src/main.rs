@@ -29,7 +29,11 @@ mod retrieve_data;
 mod telemetry;
 #[cfg(test)]
 mod test_utilities;
+#[cfg(feature = "web")]
+mod tile_engine;
 mod version_check;
+#[cfg(feature = "web")]
+mod web_server;
 mod world_editor;
 mod world_utils;
 
@@ -327,6 +331,57 @@ fn run_cli() {
     }
 }
 
+/// Detect `--web` (and optional `--port=<N>` / `--port <N>`) directly from
+/// `argv` so the admin-panel mode can run without `--bbox` or `--output-dir`,
+/// which clap would otherwise require. Returns `Some(port)` if `--web` was
+/// passed, else `None`.
+fn detect_web_flag() -> Option<u16> {
+    let mut iter = std::env::args().skip(1);
+    let mut found_web = false;
+    let mut port: u16 = 7373;
+    while let Some(a) = iter.next() {
+        if a == "--web" {
+            found_web = true;
+        } else if let Some(rest) = a.strip_prefix("--port=") {
+            if let Ok(p) = rest.parse::<u16>() {
+                port = p;
+            }
+        } else if a == "--port" {
+            if let Some(v) = iter.next() {
+                if let Ok(p) = v.parse::<u16>() {
+                    port = p;
+                }
+            }
+        }
+    }
+    if found_web {
+        Some(port)
+    } else {
+        None
+    }
+}
+
+#[cfg(feature = "web")]
+fn run_web_panel(port: u16) {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build tokio runtime");
+    if let Err(e) = rt.block_on(web_server::run(port)) {
+        eprintln!("{}: {}", "Error".red().bold(), e);
+        std::process::exit(1);
+    }
+}
+
+#[cfg(not(feature = "web"))]
+fn run_web_panel(_port: u16) {
+    eprintln!(
+        "{}: this build of arnis was compiled without the `web` feature. Rebuild with: cargo build --features web",
+        "Error".red().bold()
+    );
+    std::process::exit(1);
+}
+
 fn main() {
     // If on Windows, free and reattach to the parent console when using as a CLI tool
     // Either of these can fail, but if they do it is not an issue, so the return value is ignored
@@ -334,6 +389,12 @@ fn main() {
     unsafe {
         let _ = FreeConsole();
         let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+
+    // --web takes priority over both GUI and CLI modes.
+    if let Some(port) = detect_web_flag() {
+        run_web_panel(port);
+        return;
     }
 
     // Only run CLI mode if the user supplied args.

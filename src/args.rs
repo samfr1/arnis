@@ -91,6 +91,23 @@ pub struct Args {
     /// Print generation-only timing to stderr (excludes data fetching)
     #[arg(long, hide = true)]
     pub benchmark: bool,
+
+    /// Start the local admin panel (HTTP + WebSocket on 127.0.0.1) instead of
+    /// running a one-shot CLI generation. Splits an arbitrarily large bbox
+    /// into small tiles processed sequentially, with a backup + resume
+    /// workflow. Mutually exclusive with the normal CLI flow; when this is
+    /// set the `--bbox` and `--output-dir` flags are not required (they're
+    /// supplied through the web UI on a per-job basis).
+    ///
+    /// This flag is detected in `main` before clap parsing so it does not
+    /// require `--bbox` to be specified on the command line.
+    #[arg(long)]
+    pub web: bool,
+
+    /// Port the admin panel binds on 127.0.0.1. Default 7373. Only meaningful
+    /// in combination with `--web`.
+    #[arg(long, default_value_t = 7373)]
+    pub port: u16,
 }
 
 /// Validates CLI arguments after parsing.
