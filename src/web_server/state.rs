@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::broadcast;
 
+use super::config::AdminConfig;
 use crate::tile_engine::executor::{ExecutorEvent, JobControl, LogBuffer};
 use crate::tile_engine::manifest::JobManifest;
 
@@ -23,10 +24,12 @@ pub struct AppState {
     pub logs: Arc<LogBuffer>,
     /// `Some` while the executor thread is alive.
     pub executor_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// Admin panel config loaded from disk at startup.
+    pub config: AdminConfig,
 }
 
 impl AppState {
-    pub fn new() -> Self {
+    pub fn new(config: AdminConfig) -> Self {
         let (tx, _rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         Self {
             manifest: Mutex::new(None),
@@ -34,6 +37,7 @@ impl AppState {
             events: tx,
             logs: LogBuffer::new(),
             executor_handle: Mutex::new(None),
+            config,
         }
     }
 
@@ -56,6 +60,6 @@ impl AppState {
 
 impl Default for AppState {
     fn default() -> Self {
-        Self::new()
+        Self::new(AdminConfig::default())
     }
 }

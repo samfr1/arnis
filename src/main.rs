@@ -331,50 +331,70 @@ fn run_cli() {
     }
 }
 
-/// Detect `--web` (and optional `--port=<N>` / `--port <N>`) directly from
-/// `argv` so the admin-panel mode can run without `--bbox` or `--output-dir`,
-/// which clap would otherwise require. Returns `Some(port)` if `--web` was
-/// passed, else `None`.
-fn detect_web_flag() -> Option<u16> {
+/// Detect `--web`, `--port`, and `--host` directly from `argv` so the
+/// admin-panel mode can run without `--bbox` or `--output-dir`, which clap
+/// would otherwise require.
+struct WebOverrides {
+    port: Option<u16>,
+    host: Option<String>,
+}
+
+fn detect_web_flag() -> Option<WebOverrides> {
     let mut iter = std::env::args().skip(1);
     let mut found_web = false;
-    let mut port: u16 = 7373;
+    let mut port: Option<u16> = None;
+    let mut host: Option<String> = None;
     while let Some(a) = iter.next() {
         if a == "--web" {
             found_web = true;
         } else if let Some(rest) = a.strip_prefix("--port=") {
             if let Ok(p) = rest.parse::<u16>() {
-                port = p;
+                port = Some(p);
             }
         } else if a == "--port" {
             if let Some(v) = iter.next() {
                 if let Ok(p) = v.parse::<u16>() {
-                    port = p;
+                    port = Some(p);
                 }
+            }
+        } else if let Some(rest) = a.strip_prefix("--host=") {
+            host = Some(rest.to_string());
+        } else if a == "--host" {
+            if let Some(v) = iter.next() {
+                host = Some(v);
             }
         }
     }
     if found_web {
-        Some(port)
+        Some(WebOverrides { port, host })
     } else {
         None
     }
 }
 
 #[cfg(feature = "web")]
-fn run_web_panel(port: u16) {
+fn run_web_panel(overrides: WebOverrides) {
+    let mut config = web_server::config::load_or_create();
+    if let Some(p) = overrides.port {
+        config.port = p;
+    }
+    if let Some(h) = overrides.host {
+        config.bind = h;
+    }
+    let opts = web_server::ServerOptions { config };
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("failed to build tokio runtime");
-    if let Err(e) = rt.block_on(web_server::run(port)) {
+    if let Err(e) = rt.block_on(web_server::run(opts)) {
         eprintln!("{}: {}", "Error".red().bold(), e);
         std::process::exit(1);
     }
 }
 
 #[cfg(not(feature = "web"))]
-fn run_web_panel(_port: u16) {
+fn run_web_panel(_overrides: WebOverrides) {
     eprintln!(
         "{}: this build of arnis was compiled without the `web` feature. Rebuild with: cargo build --features web",
         "Error".red().bold()
@@ -392,8 +412,8 @@ fn main() {
     }
 
     // --web takes priority over both GUI and CLI modes.
-    if let Some(port) = detect_web_flag() {
-        run_web_panel(port);
+    if let Some(overrides) = detect_web_flag() {
+        run_web_panel(overrides);
         return;
     }
 

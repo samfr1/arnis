@@ -250,10 +250,44 @@ impl JobExecutor {
             // entirely if the tile clearly contains no OSM data. This is what
             // turns a whole-Earth job from "76k child processes" into "a few
             // hundred where land actually is".
-            let result = match probe_tile_has_data(&entry.task.buffered_bbox) {
+            let mut result = match probe_tile_has_data(&entry.task.buffered_bbox) {
                 Some(false) => Ok(TileOutcome::Skipped("empty Overpass probe".to_string())),
                 _ => self.run_one_tile(&entry.tile_dir, &entry),
             };
+
+            // If the child finished cleanly, merge its per-tile world into
+            // the master world directory so the user can open it in
+            // Minecraft and see one continuous world covering all completed
+            // tiles. Merge errors demote the tile to Failed so they show up
+            // in the UI.
+            if matches!(result, Ok(TileOutcome::Done)) {
+                let master_world_dir = self.manifest.lock().unwrap().world_path.clone();
+                match super::merge::find_child_world_dir(&entry.tile_dir) {
+                    Some(child_world) => {
+                        match super::merge::merge_tile_into_master(
+                            &child_world,
+                            &master_world_dir,
+                        ) {
+                            Ok(n) => {
+                                self.log(format!(
+                                    "[tile {}] merged {n} chunks into master world",
+                                    entry.task.id
+                                ));
+                                // After a successful merge the per-tile dir
+                                // is redundant and just eats disk; remove it.
+                                let _ = std::fs::remove_dir_all(&entry.tile_dir);
+                            }
+                            Err(e) => {
+                                result = Err(format!("merge failed: {e}"));
+                            }
+                        }
+                    }
+                    None => {
+                        result = Err("child produced no world dir to merge".to_string());
+                    }
+                }
+            }
+
             let duration = started.elapsed().as_secs();
 
             let mut m = self.manifest.lock().unwrap();

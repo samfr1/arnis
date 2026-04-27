@@ -104,10 +104,16 @@ pub struct Args {
     #[arg(long)]
     pub web: bool,
 
-    /// Port the admin panel binds on 127.0.0.1. Default 7373. Only meaningful
-    /// in combination with `--web`.
-    #[arg(long, default_value_t = 7373)]
-    pub port: u16,
+    /// Port the admin panel binds on. Overrides the value in `config.toml`.
+    /// Only meaningful in combination with `--web`.
+    #[arg(long)]
+    pub port: Option<u16>,
+
+    /// Address the admin panel binds on. Overrides `bind` in `config.toml`.
+    /// Use `0.0.0.0` to expose on the LAN (no auth!) or omit for `127.0.0.1`.
+    /// Only meaningful in combination with `--web`.
+    #[arg(long)]
+    pub host: Option<String>,
 }
 
 /// Validates CLI arguments after parsing.

@@ -1020,7 +1020,8 @@ fn gui_start_generation(
                 disable_height_limit,
                 benchmark: false,
                 web: false,
-                port: 7373,
+                port: None,
+                host: None,
             };
 
             // If skip_osm_objects is true (terrain-only mode), skip fetching and processing OSM data

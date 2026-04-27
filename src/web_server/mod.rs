@@ -6,16 +6,26 @@
 
 pub mod api;
 pub mod assets;
+pub mod config;
 pub mod state;
 pub mod ws;
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use axum::routing::{get, post};
 use axum::Router;
 
+pub use config::AdminConfig;
 pub use state::AppState;
+
+/// Configuration handed to `run` from the CLI/main glue. Allows callers to
+/// override `host`/`port` from CLI flags while still reading the rest from
+/// the on-disk config file.
+#[derive(Clone, Debug)]
+pub struct ServerOptions {
+    pub config: AdminConfig,
+}
 
 /// Build the axum router. Public so it can be used in tests.
 pub fn router(state: Arc<AppState>) -> Router {
@@ -32,25 +42,25 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/job/tiles", get(api::job_tiles))
         .route("/api/logs", get(api::logs))
         .route("/api/defaults", get(api::defaults))
+        .route("/api/job/snapshot", post(api::snapshot_world))
+        .route("/api/job/snapshots", get(api::list_snapshots))
         .route("/ws/events", get(ws::ws_handler))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state)
 }
 
-/// Run the server until Ctrl+C. Opens the admin panel in the user's default
-/// browser as soon as the listener is bound.
-pub async fn run(port: u16) -> Result<(), String> {
-    let state = Arc::new(AppState::new());
-
-    // Try to load any pre-existing manifest so a restarted process shows the
-    // last job's state immediately. Discovery is best-effort: we look for a
-    // `*.arnis-job.json` next to a typical world folder via the user's saved
-    // setting cache, which doesn't exist yet on first run — so this just no-ops
-    // until /api/job/create is called.
+/// Run the admin server until Ctrl+C.
+pub async fn run(opts: ServerOptions) -> Result<(), String> {
+    let cfg = opts.config.clone();
+    let state = Arc::new(AppState::new(cfg.clone()));
     state.try_resume_existing();
 
     let app = router(Arc::clone(&state));
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let host: IpAddr = cfg
+        .bind
+        .parse()
+        .map_err(|e| format!("invalid bind address {:?}: {e}", cfg.bind))?;
+    let addr = SocketAddr::from((host, cfg.port));
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,
         Err(e) => {
@@ -60,10 +70,15 @@ pub async fn run(port: u16) -> Result<(), String> {
         }
     };
 
-    let url = format!("http://127.0.0.1:{port}/");
-    println!("Arnis admin panel listening on {url}");
-    if let Err(e) = open::that(&url) {
-        eprintln!("Could not auto-open browser ({e}); navigate to {url} manually.");
+    let local_url = format!("http://127.0.0.1:{}/", cfg.port);
+    println!("Arnis admin panel listening on http://{addr}/");
+    if cfg.bind != "127.0.0.1" {
+        println!("Local URL:   {local_url}");
+    }
+    if cfg.auto_open_browser {
+        if let Err(e) = open::that(&local_url) {
+            eprintln!("Could not auto-open browser ({e}); navigate to {local_url} manually.");
+        }
     }
 
     axum::serve(listener, app)

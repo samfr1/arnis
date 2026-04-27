@@ -174,6 +174,57 @@
   .err { color: var(--bad); margin-top: calc(var(--grid)*2); font-size: 12px; min-height: 1em; }
   .hidden { display: none !important; }
 
+  /* Hero buttons row — primary + secondary side-by-side. */
+  .hero-buttons { display: grid; grid-template-columns: 2fr 1fr; gap: calc(var(--grid)*2); }
+  button.secondary {
+    background: var(--surface-2); color: var(--fg);
+    border: 1px solid var(--border);
+    transition: border-color var(--transition), background var(--transition), transform var(--transition);
+  }
+  button.secondary.huge {
+    font-size: 14px; padding: calc(var(--grid)*5) calc(var(--grid)*4);
+    width: 100%; font-weight: 600; letter-spacing: 0.02em;
+  }
+  button.secondary.huge:hover:not(:disabled) {
+    border-color: var(--accent); transform: translateY(-2px);
+  }
+
+  /* Snapshot list. */
+  .snapshots { display: grid; gap: calc(var(--grid)*2); }
+  .snap {
+    background: var(--surface-2); border: 1px solid var(--border);
+    padding: calc(var(--grid)*3); border-radius: calc(var(--grid)*1);
+    transition: border-color var(--transition);
+  }
+  .snap:hover { border-color: var(--accent); }
+  .snap-path { font-size: 12px; word-break: break-all; }
+  .snap-meta { color: var(--fg-muted); font-size: 11px; margin-top: 2px; }
+  .hint { color: var(--fg-muted); font-size: 11.5px; margin-top: calc(var(--grid)*2); }
+  code {
+    background: var(--surface-2); padding: 1px 4px; border-radius: 3px;
+    font-family: ui-monospace, 'JetBrains Mono', monospace; font-size: 11.5px;
+  }
+
+  /* Responsive: tablet & mobile. */
+  @media (max-width: 900px) {
+    main { padding: calc(var(--grid)*2); gap: calc(var(--grid)*3); }
+    section.card { padding: calc(var(--grid)*3); }
+    .hero-buttons { grid-template-columns: 1fr; }
+    .quick { display: grid; grid-template-columns: 1fr; gap: calc(var(--grid)*2); }
+    .quick label { width: 100%; }
+    input[type="range"] { width: 100%; }
+    .stats { grid-template-columns: repeat(2, 1fr) !important; }
+    #map, #progress-map { height: 300px !important; }
+    .btn-row { display: flex; flex-wrap: wrap; gap: calc(var(--grid)*2); }
+    .btn-row > button { flex: 1 1 auto; min-width: 30%; }
+    button.primary.huge, button.secondary.huge { font-size: 14px; }
+  }
+  @media (max-width: 520px) {
+    .stats { grid-template-columns: 1fr !important; }
+    header.bar { padding: calc(var(--grid)*2); }
+    .logo { font-size: 12px; }
+  }
+
   .btn-row { display: flex; gap: calc(var(--grid)*2); flex-wrap: wrap; }
 
   .map-overlay {
@@ -212,21 +263,25 @@
     <h2>Setup</h2>
     <div class="hero">
       <div class="hero-text">
-        Generates the entire planet, splitting it into tiles processed sequentially.
-        Each tile runs as a separate child process so memory is reclaimed between tiles.
-        Pause / resume any time — the job is crash-safe and resumable on restart.
+        По умолчанию генерируется <b>центр Санкт-Петербурга</b> 5×5 км. Каждый тайл запускается
+        отдельным процессом — память освобождается между тайлами. Pause / resume в любой момент,
+        манифест на диске → можно перезапустить программу и продолжить с того же места.
+        Конфиг: <code id="cfg-path">~/.config/arnis/config.toml</code>.
       </div>
 
       <div class="quick">
         <label>World folder
           <input id="world-path" type="text" placeholder="(auto)" />
         </label>
-        <label>Tile size (km) — <span id="tile-size-label">100</span>
-          <input id="tile-size" type="range" min="1" max="100" value="100" step="1" />
+        <label>Tile size (km) — <span id="tile-size-label">5</span>
+          <input id="tile-size" type="range" min="1" max="100" value="5" step="1" />
         </label>
       </div>
 
-      <button id="btn-create-world" class="primary huge">Сгенерировать весь мир</button>
+      <div class="hero-buttons">
+        <button id="btn-create-default" class="primary huge">Сгенерировать (Питер 5×5 км)</button>
+        <button id="btn-create-world"   class="secondary huge">Весь мир</button>
+      </div>
 
       <details>
         <summary>Advanced (custom area, generation flags)</summary>
@@ -266,13 +321,25 @@
   <section id="control-card" class="card hidden">
     <h2>Control</h2>
     <div class="btn-row">
-      <button id="btn-start"   class="primary">Start</button>
+      <button id="btn-start"    class="primary">Start</button>
       <button id="btn-pause">Pause</button>
       <button id="btn-resume">Resume</button>
-      <button id="btn-cancel"  class="danger">Cancel</button>
-      <button id="btn-restore" class="warn">Restore Backup</button>
+      <button id="btn-cancel"   class="danger">Cancel</button>
+      <button id="btn-snapshot" class="primary" title="Скопировать текущий мир в snapshot — генерация продолжится">Save snapshot</button>
+      <button id="btn-restore"  class="warn">Restore Backup</button>
     </div>
     <div id="control-err" class="err"></div>
+  </section>
+
+  <!-- Saved snapshots: shown as a list, refreshed after each snapshot completes. -->
+  <section id="snapshots-card" class="card hidden">
+    <h2>Snapshots</h2>
+    <div id="snapshots-list" class="snapshots"></div>
+    <div class="hint">
+      Снапшот — это полная копия мастер-мира на диске. Скопируйте папку из списка
+      в <code>~/.minecraft/saves/</code> и откройте мир в Minecraft. Генерация при этом
+      не останавливается.
+    </div>
   </section>
 
   <section id="stats-card" class="card hidden">
@@ -473,6 +540,7 @@
       document.getElementById('control-card').classList.add('hidden');
       document.getElementById('stats-card').classList.add('hidden');
       document.getElementById('log-card').classList.add('hidden');
+      document.getElementById('snapshots-card').classList.add('hidden');
       return;
     }
     setBadge(m.status);
@@ -482,12 +550,16 @@
     document.getElementById('control-card').classList.remove('hidden');
     document.getElementById('stats-card').classList.remove('hidden');
     document.getElementById('log-card').classList.remove('hidden');
+    document.getElementById('snapshots-card').classList.remove('hidden');
 
-    document.getElementById('btn-start').disabled  = m.status === 'running' || m.status === 'paused';
-    document.getElementById('btn-pause').disabled  = m.status !== 'running';
-    document.getElementById('btn-resume').disabled = m.status !== 'paused';
-    document.getElementById('btn-cancel').disabled = m.status !== 'running' && m.status !== 'paused';
-    document.getElementById('btn-restore').disabled = m.status === 'running' || !m.backup_path;
+    document.getElementById('btn-start').disabled    = m.status === 'running' || m.status === 'paused';
+    document.getElementById('btn-pause').disabled    = m.status !== 'running';
+    document.getElementById('btn-resume').disabled   = m.status !== 'paused';
+    document.getElementById('btn-cancel').disabled   = m.status !== 'running' && m.status !== 'paused';
+    document.getElementById('btn-restore').disabled  = m.status === 'running' || !m.backup_path;
+    // Snapshot button enabled whenever a master world dir exists. It's
+    // safe (and useful!) while running, paused, or after completion.
+    document.getElementById('btn-snapshot').disabled = !m.world_path;
 
     drawTilesOnProgressMap(m.tiles);
     renderStats(m);
@@ -614,14 +686,35 @@
     };
   }
 
-  document.getElementById('btn-create-world').addEventListener('click', async () => {
+  // Generate the configured default region (St. Petersburg 5×5 km out of
+  // the box; can be overridden in ~/.config/arnis/config.toml).
+  document.getElementById('btn-create-default').addEventListener('click', async () => {
     const errEl = document.getElementById('setup-err');
     errEl.textContent = '';
     const wp = (document.getElementById('world-path').value || DEFAULTS.default_world_path).trim();
     try {
       await api('/api/job/create', { method: 'POST', body: {
-        bbox: DEFAULTS.world_bbox,
+        bbox: DEFAULTS.default_bbox,
         tile_size_km: parseFloat(tileSize.value),
+        world_path: wp,
+        settings: readSettings()
+      }});
+      await api('/api/job/start', { method: 'POST' });
+      await refreshAll();
+    } catch (e) { errEl.textContent = e.message; }
+  });
+
+  // "Whole world" mode — same flow but with the planetary bbox and the
+  // 100 km tile default. Confirms first because it's a long job.
+  document.getElementById('btn-create-world').addEventListener('click', async () => {
+    const errEl = document.getElementById('setup-err');
+    errEl.textContent = '';
+    if (!confirm('Сгенерировать ВЕСЬ МИР (76 000+ тайлов, многие часы работы)?')) return;
+    const wp = (document.getElementById('world-path').value || DEFAULTS.default_world_path).trim();
+    try {
+      await api('/api/job/create', { method: 'POST', body: {
+        bbox: DEFAULTS.world_bbox,
+        tile_size_km: DEFAULTS.default_world_tile_km || 100.0,
         world_path: wp,
         settings: readSettings()
       }});
@@ -663,6 +756,40 @@
   controlBtn('btn-restore','/api/job/restore-backup',
              { confirm: 'Replace the world folder with its backup? This cannot be undone.' });
 
+  // Snapshot button. Posts /api/job/snapshot which kicks off a background
+  // copy on the server; we then re-fetch the list so the new entry shows up.
+  document.getElementById('btn-snapshot').addEventListener('click', async () => {
+    const errEl = document.getElementById('control-err');
+    errEl.textContent = '';
+    try {
+      const r = await api('/api/job/snapshot', { method: 'POST' });
+      errEl.textContent = `Snapshot копируется → ${r.snapshot_path}`;
+      // Snapshot completion is async; poll the list a few times.
+      for (let i = 0; i < 12; i++) {
+        await new Promise(r => setTimeout(r, 2500));
+        await refreshSnapshots();
+      }
+    } catch (e) { errEl.textContent = e.message; }
+  });
+
+  async function refreshSnapshots() {
+    try {
+      const r = await api('/api/job/snapshots');
+      const el = document.getElementById('snapshots-list');
+      const list = r.snapshots || [];
+      if (list.length === 0) {
+        el.innerHTML = '<div class="hint" style="opacity:.5;">Снапшотов пока нет.</div>';
+        return;
+      }
+      el.innerHTML = list.map(s => `
+        <div class="snap">
+          <div class="snap-path mono">${s.path}</div>
+          <div class="snap-meta">${s.size_mib} MiB · ${new Date(s.timestamp * 1000).toLocaleString()}</div>
+        </div>
+      `).join('');
+    } catch {}
+  }
+
   // ---------- Init ----------
   (async () => {
     try {
@@ -670,14 +797,28 @@
       DEFAULTS = d;
       document.getElementById('world-path').value = d.default_world_path || '';
       document.getElementById('world-path').placeholder = d.default_world_path || '(auto)';
-      // Default tile slider to the larger world-tile value.
-      tileSize.value = String(d.default_world_tile_km || 100);
-      tileSizeLabel.innerText = tileSize.value;
+      // Slider tracks the configured per-tile size for the default region;
+      // pre-fill the four bbox inputs with the same default region too.
+      const ts = d.default_tile_size_km || 5;
+      tileSize.value = String(ts);
+      tileSizeLabel.innerText = String(ts);
+      const bb = d.default_bbox || [];
+      if (bb.length === 4) {
+        document.getElementById('bb-min-lat').value = bb[0];
+        document.getElementById('bb-min-lng').value = bb[1];
+        document.getElementById('bb-max-lat').value = bb[2];
+        document.getElementById('bb-max-lng').value = bb[3];
+        // Also center the setup map preview on the default region so the
+        // user sees where "Generate" will run by default.
+        try {
+          map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: [20, 20] });
+        } catch {}
+      }
     } catch {}
     await refreshAll();
     await refreshLogs();
+    await refreshSnapshots();
     connectWs();
-    // Make sure both Leaflet maps render fully once their cards are visible.
     setTimeout(() => { map.invalidateSize(); if (progressMap) progressMap.invalidateSize(); }, 100);
   })();
 </script>

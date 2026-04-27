@@ -10,6 +10,7 @@
 pub mod executor;
 pub mod grid;
 pub mod manifest;
+pub mod merge;
 pub mod snapshot;
 
 // Re-exports kept for ergonomic access from `web_server` and tests. The

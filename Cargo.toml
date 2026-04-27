@@ -18,7 +18,7 @@ gui = ["tauri", "tauri-plugin-log", "tauri-plugin-shell", "tokio", "rfd", "tauri
 bedrock = ["bedrockrs_level", "bedrockrs_shared", "nbtx", "zip", "byteorder", "vek", "rusty-leveldb"]
 # Local admin panel: a localhost-only HTTP+WS server that orchestrates tile-by-tile
 # generation of arbitrarily large bboxes. Adds the `--web` CLI flag.
-web = ["dep:axum", "dep:tower-http", "dep:open", "dep:futures-util", "tokio"]
+web = ["dep:axum", "dep:tower-http", "dep:open", "dep:futures-util", "dep:toml", "tokio"]
 
 [build-dependencies]
 tauri-build = {version = "2", optional = true}
@@ -66,6 +66,7 @@ axum = { version = "0.7", features = ["ws"], optional = true }
 tower-http = { version = "0.5", features = ["cors"], optional = true }
 open = { version = "5", optional = true }
 futures-util = { version = "0.3", optional = true, default-features = false, features = ["sink", "std"] }
+toml = { version = "0.8", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.0", features = ["Win32_System_Console"] }

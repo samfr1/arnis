@@ -9,6 +9,10 @@
 /target
 **/*.rs.bk
 
+# Per-run admin-panel artefacts (manifest, generated worlds, backups, snapshots).
+/arnis-world*
+*.arnis-job.json
+
 # IDE/editor files
 .idea/
 /.vscode/
