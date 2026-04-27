@@ -19,6 +19,10 @@ pub enum TileStatus {
     Pending,
     Running,
     Done,
+    /// The tile contained no OSM data (typically open ocean) and was skipped
+    /// without spawning a child generator. Counted as completed for progress
+    /// purposes but rendered distinctly in the UI.
+    Skipped,
     Failed,
     Canceled,
 }
@@ -60,6 +64,8 @@ pub struct JobManifest {
     pub status: JobStatus,
     pub total: usize,
     pub done: usize,
+    #[serde(default)]
+    pub skipped: usize,
     pub failed: usize,
     pub canceled: usize,
     pub started_at: u64,
@@ -117,6 +123,7 @@ impl JobManifest {
             status: JobStatus::Pending,
             total,
             done: 0,
+            skipped: 0,
             failed: 0,
             canceled: 0,
             started_at: now,
@@ -177,6 +184,11 @@ impl JobManifest {
             .tiles
             .iter()
             .filter(|t| t.status == TileStatus::Done)
+            .count();
+        self.skipped = self
+            .tiles
+            .iter()
+            .filter(|t| t.status == TileStatus::Skipped)
             .count();
         self.failed = self
             .tiles

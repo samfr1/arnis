@@ -18,10 +18,10 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tokio::sync::broadcast;
@@ -80,11 +80,17 @@ pub enum ExecutorEvent {
         index: usize,
         error: String,
     },
+    TileSkipped {
+        tile_id: String,
+        index: usize,
+        reason: String,
+    },
     JobPaused,
     #[allow(dead_code)]
     JobResumed,
     JobDone {
         done: usize,
+        skipped: usize,
         failed: usize,
         canceled: usize,
     },
@@ -124,12 +130,28 @@ impl LogBuffer {
     }
 }
 
+/// Outcome of generating a single tile. `Done` means the child wrote the
+/// tile world; `Skipped` means the area contained no OSM data and was not
+/// worth running through the full generator (typically open ocean).
+enum TileOutcome {
+    Done,
+    Skipped(String),
+}
+
 pub struct JobExecutor {
     pub manifest: Arc<Mutex<JobManifest>>,
     pub control: Arc<JobControl>,
     pub events: broadcast::Sender<ExecutorEvent>,
     pub logs: Arc<LogBuffer>,
+    /// When the manifest was last persisted. Used to throttle disk writes —
+    /// for huge jobs (whole-Earth = ~76k tiles), serializing the full manifest
+    /// after every tile would write tens of GB.
+    last_save: Mutex<Instant>,
 }
+
+/// Minimum interval between manifest writes when nothing else forces a save.
+/// State transitions (start/pause/cancel/done) always force an immediate save.
+const SAVE_THROTTLE: Duration = Duration::from_millis(2500);
 
 impl JobExecutor {
     pub fn new(
@@ -143,6 +165,18 @@ impl JobExecutor {
             control,
             events,
             logs,
+            last_save: Mutex::new(Instant::now() - SAVE_THROTTLE * 2),
+        }
+    }
+
+    /// Persist the manifest if enough time has elapsed since the last save
+    /// (or `force` is true). Always touches `updated_at`.
+    fn maybe_save(&self, m: &mut JobManifest, force: bool) {
+        m.touch();
+        let mut last = self.last_save.lock().unwrap();
+        if force || last.elapsed() >= SAVE_THROTTLE {
+            let _ = m.save_atomic();
+            *last = Instant::now();
         }
     }
 
@@ -164,8 +198,7 @@ impl JobExecutor {
                 return;
             }
             m.status = JobStatus::Running;
-            m.touch();
-            let _ = m.save_atomic();
+            self.maybe_save(&mut m, true);
             let _ = self.events.send(ExecutorEvent::JobStarted {
                 job_id: m.job_id.clone(),
                 total: m.total,
@@ -193,8 +226,7 @@ impl JobExecutor {
                         m.tiles[idx].status = TileStatus::Running;
                         m.tiles[idx].started_at = Some(unix_now());
                         m.tiles[idx].error = None;
-                        m.touch();
-                        let _ = m.save_atomic();
+                        self.maybe_save(&mut m, false);
                         Some((idx, m.tiles[idx].clone()))
                     }
                 }
@@ -214,17 +246,23 @@ impl JobExecutor {
             ));
 
             let started = Instant::now();
-            let result = self.run_one_tile(&entry.tile_dir, &entry);
+            // Cheap pre-flight Overpass probe: skip the costly child spawn
+            // entirely if the tile clearly contains no OSM data. This is what
+            // turns a whole-Earth job from "76k child processes" into "a few
+            // hundred where land actually is".
+            let result = match probe_tile_has_data(&entry.task.buffered_bbox) {
+                Some(false) => Ok(TileOutcome::Skipped("empty Overpass probe".to_string())),
+                _ => self.run_one_tile(&entry.tile_dir, &entry),
+            };
             let duration = started.elapsed().as_secs();
 
             let mut m = self.manifest.lock().unwrap();
             match result {
-                Ok(()) => {
+                Ok(TileOutcome::Done) => {
                     m.tiles[idx].status = TileStatus::Done;
                     m.tiles[idx].finished_at = Some(unix_now());
                     m.recount();
-                    m.touch();
-                    let _ = m.save_atomic();
+                    self.maybe_save(&mut m, false);
                     drop(m);
                     let _ = self.events.send(ExecutorEvent::TileDone {
                         tile_id: entry.task.id.clone(),
@@ -233,13 +271,25 @@ impl JobExecutor {
                     });
                     self.log(format!("[tile {}] done in {duration}s", entry.task.id));
                 }
+                Ok(TileOutcome::Skipped(reason)) => {
+                    m.tiles[idx].status = TileStatus::Skipped;
+                    m.tiles[idx].finished_at = Some(unix_now());
+                    m.recount();
+                    self.maybe_save(&mut m, false);
+                    drop(m);
+                    let _ = self.events.send(ExecutorEvent::TileSkipped {
+                        tile_id: entry.task.id.clone(),
+                        index: idx,
+                        reason: reason.clone(),
+                    });
+                    self.log(format!("[tile {}] skipped ({reason})", entry.task.id));
+                }
                 Err(e) => {
                     m.tiles[idx].status = TileStatus::Failed;
                     m.tiles[idx].finished_at = Some(unix_now());
                     m.tiles[idx].error = Some(e.clone());
                     m.recount();
-                    m.touch();
-                    let _ = m.save_atomic();
+                    self.maybe_save(&mut m, false);
                     drop(m);
                     let _ = self.events.send(ExecutorEvent::TileFailed {
                         tile_id: entry.task.id.clone(),
@@ -255,25 +305,23 @@ impl JobExecutor {
     fn finalize_done(&self) {
         let mut m = self.manifest.lock().unwrap();
         m.recount();
-        // If there are still pending tiles (shouldn't happen here but be safe)
-        // leave the job in its current state; otherwise mark Done.
         if m.next_pending().is_none() {
-            m.status = if m.failed > 0 && m.done == 0 {
+            m.status = if m.failed > 0 && m.done == 0 && m.skipped == 0 {
                 JobStatus::Failed
             } else {
                 JobStatus::Done
             };
         }
-        m.touch();
-        let _ = m.save_atomic();
+        self.maybe_save(&mut m, true);
         let _ = self.events.send(ExecutorEvent::JobDone {
             done: m.done,
+            skipped: m.skipped,
             failed: m.failed,
             canceled: m.canceled,
         });
         self.log(format!(
-            "[job {}] complete — done={}, failed={}, canceled={}",
-            m.job_id, m.done, m.failed, m.canceled
+            "[job {}] complete — done={}, skipped={}, failed={}, canceled={}",
+            m.job_id, m.done, m.skipped, m.failed, m.canceled
         ));
     }
 
@@ -286,8 +334,7 @@ impl JobExecutor {
         }
         m.recount();
         m.status = JobStatus::Canceled;
-        m.touch();
-        let _ = m.save_atomic();
+        self.maybe_save(&mut m, true);
         let _ = self.events.send(ExecutorEvent::JobCanceled);
         self.log(format!("[job {}] canceled", m.job_id));
     }
@@ -295,8 +342,7 @@ impl JobExecutor {
     fn mark_paused(&self) {
         let mut m = self.manifest.lock().unwrap();
         m.status = JobStatus::Paused;
-        m.touch();
-        let _ = m.save_atomic();
+        self.maybe_save(&mut m, true);
         let _ = self.events.send(ExecutorEvent::JobPaused);
         self.log(format!("[job {}] paused", m.job_id));
     }
@@ -314,7 +360,7 @@ impl JobExecutor {
         &self,
         tile_dir: &PathBuf,
         entry: &super::manifest::TileEntry,
-    ) -> Result<(), String> {
+    ) -> Result<TileOutcome, String> {
         std::fs::create_dir_all(tile_dir).map_err(|e| format!("create tile dir failed: {e}"))?;
 
         let exe = std::env::current_exe().map_err(|e| format!("can't resolve current exe: {e}"))?;
@@ -341,22 +387,109 @@ impl JobExecutor {
             cmd.arg("--bedrock");
         }
 
-        // Tag the child so it never falls into GUI mode (more than 1 arg
-        // already prevents that, but be explicit).
         cmd.env("ARNIS_TILE_CHILD", "1");
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-        let status = cmd
-            .status()
+        let output = cmd
+            .output()
             .map_err(|e| format!("failed to spawn child: {e}"))?;
-        if !status.success() {
+
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        // Heuristic: detect tiles that are empty (open ocean / Antarctica /
+        // no OSM coverage). The arnis CLI reports either "API returned no
+        // data" or panics with an explicit empty-bbox message; both should
+        // count as Skipped, not Failed, so the dashboard stays meaningful
+        // when generating large regions.
+        let looks_empty = [
+            "API returned no data",
+            "no data",
+            "empty bounding box",
+            "Bbox doesn't include any element",
+            "called `Option::unwrap()` on a `None` value",
+        ]
+        .iter()
+        .any(|needle| combined.contains(needle));
+
+        if !output.status.success() {
+            if looks_empty {
+                return Ok(TileOutcome::Skipped("no OSM data".to_string()));
+            }
+            // Surface the last meaningful line of stderr in the error message
+            // so the UI shows something better than "exit 101".
+            let last_line = combined
+                .lines()
+                .rev()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("")
+                .trim()
+                .to_string();
             return Err(format!(
-                "child exited with status {}",
-                status
+                "child exited with status {}: {}",
+                output
+                    .status
                     .code()
                     .map(|c| c.to_string())
-                    .unwrap_or_else(|| "<signal>".to_string())
+                    .unwrap_or_else(|| "<signal>".to_string()),
+                last_line
             ));
         }
-        Ok(())
+
+        if looks_empty {
+            return Ok(TileOutcome::Skipped("no OSM data".to_string()));
+        }
+        Ok(TileOutcome::Done)
     }
+}
+
+/// Lightweight Overpass probe: ask for the count of nodes/ways/relations
+/// inside the bbox with a tight timeout, and return whether any element
+/// exists. Used to skip generating empty (e.g. open ocean) tiles without
+/// paying the full child-process startup cost. Returns `None` if we couldn't
+/// reach Overpass (we then fall back to running the child).
+fn probe_tile_has_data(bbox: &super::grid::BBox) -> Option<bool> {
+    let q = format!(
+        "[out:json][timeout:8];(node({},{},{},{});way({},{},{},{});relation({},{},{},{}););out count;",
+        bbox.min_lat, bbox.min_lng, bbox.max_lat, bbox.max_lng,
+        bbox.min_lat, bbox.min_lng, bbox.max_lat, bbox.max_lng,
+        bbox.min_lat, bbox.min_lng, bbox.max_lat, bbox.max_lng,
+    );
+    let endpoints = [
+        "https://overpass-api.de/api/interpreter",
+        "https://z.overpass-api.de/api/interpreter",
+    ];
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .ok()?;
+    for url in endpoints {
+        let resp = client.post(url).body(q.clone()).send();
+        let Ok(r) = resp else { continue };
+        if !r.status().is_success() {
+            continue;
+        }
+        let Ok(text) = r.text() else { continue };
+        // Overpass "out count" returns JSON with elements[0].tags.{nodes,ways,relations,total}.
+        // We don't bother fully deserializing — substring-search the keys.
+        let total_pos = text.find("\"total\"")?;
+        let after = &text[total_pos..];
+        // Find the first ":" then the first digit run.
+        let colon = after.find(':')?;
+        let mut count: u64 = 0;
+        let mut started = false;
+        for ch in after[colon + 1..].chars() {
+            if ch.is_ascii_digit() {
+                started = true;
+                count = count * 10 + (ch as u64 - '0' as u64);
+            } else if started {
+                break;
+            }
+        }
+        return Some(count > 0);
+    }
+    None
 }
