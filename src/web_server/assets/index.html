@@ -98,6 +98,10 @@
     font-family: inherit; font-size: 12px; cursor: pointer;
   }
   button.primary { background: var(--accent); color: #fff; border-color: transparent; }
+  button.primary.huge {
+    font-size: 16px; padding: calc(var(--grid)*4) calc(var(--grid)*6);
+    width: 100%; font-weight: 600; letter-spacing: 0.04em;
+  }
   button.warn { background: var(--warn); color: #1a1a1a; border-color: transparent; }
   button.danger { background: var(--bad); color: #fff; border-color: transparent; }
   button:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -105,35 +109,14 @@
   details { margin-top: calc(var(--grid)*3); }
   details > summary { cursor: pointer; color: var(--fg-muted); font-size: 12px; }
 
-  #map { height: 360px; border-radius: calc(var(--grid)*1); border: 1px solid var(--border); }
+  #map { height: 420px; border-radius: calc(var(--grid)*1); border: 1px solid var(--border); }
 
-  .grid-tiles {
-    display: grid; gap: 2px; max-width: 100%;
-    overflow: auto; padding: 2px; background: var(--surface-2);
-    border-radius: calc(var(--grid)*1); max-height: 320px;
-  }
-  .tile {
-    width: 14px; height: 14px; border-radius: 2px;
-    background: var(--surface);
-    position: relative;
-  }
-  .tile[data-status="pending"]  { background: #2c313a; }
-  .tile[data-status="running"]  { background: var(--running); animation: pulse 1.4s infinite; }
-  .tile[data-status="done"]     { background: var(--good); }
-  .tile[data-status="failed"]   { background: var(--bad); }
-  .tile[data-status="canceled"] { background: #1a1c20; }
-  @keyframes pulse {
-    0%,100% { opacity: 1.0; }
-    50%     { opacity: 0.55; }
-  }
-  .tile:hover::after {
-    content: attr(data-tooltip);
-    position: absolute; left: 18px; top: 0;
-    background: var(--surface); color: var(--fg);
-    border: 1px solid var(--border); padding: 4px 8px;
-    font-size: 11px; white-space: pre; z-index: 5;
-    border-radius: 4px; pointer-events: none;
-  }
+  /* Tiles drawn on the Leaflet map carry these classes via setStyle. */
+  .leaflet-tile-pending  { fill: #2c313a; fill-opacity: 0.25; stroke: #444; stroke-width: 0.5; }
+  .leaflet-tile-running  { fill: var(--running); fill-opacity: 0.7; stroke: #fff; stroke-width: 1.2; }
+  .leaflet-tile-done     { fill: var(--good); fill-opacity: 0.65; stroke: #1c5a3e; stroke-width: 0.5; }
+  .leaflet-tile-failed   { fill: var(--bad); fill-opacity: 0.7; stroke: #6b1e1e; stroke-width: 0.5; }
+  .leaflet-tile-canceled { fill: #1a1c20; fill-opacity: 0.4; stroke: #444; stroke-width: 0.5; }
 
   .stats { display: flex; gap: calc(var(--grid)*6); flex-wrap: wrap; align-items: center; font-size: 12px; }
   .stats .num { font-size: 16px; color: var(--fg); }
@@ -153,6 +136,26 @@
   .hidden { display: none !important; }
 
   .btn-row { display: flex; gap: calc(var(--grid)*2); flex-wrap: wrap; }
+
+  .map-overlay {
+    background: rgba(0,0,0,0.55); color: #fff;
+    padding: 4px 8px; font-size: 11px; border-radius: 4px;
+    line-height: 1.4;
+  }
+  html[data-theme="light"] .map-overlay { background: rgba(40,40,40,0.85); }
+
+  .hero {
+    display: flex; flex-direction: column; gap: calc(var(--grid)*3);
+  }
+  .hero-text { color: var(--fg-muted); font-size: 12px; }
+
+  /* Compact world-mode toggle row */
+  .quick {
+    display: flex; align-items: center; gap: calc(var(--grid)*3);
+    flex-wrap: wrap;
+  }
+  .quick label { margin-bottom: 0; }
+  .quick input[type="text"] { flex: 1; min-width: 280px; }
 </style>
 </head>
 <body>
@@ -165,47 +168,60 @@
 </header>
 
 <main>
+  <!-- One-click whole-Earth generation. Hidden once a job is active. -->
   <section id="setup-card" class="card">
     <h2>Setup</h2>
-    <div class="row" style="align-items: stretch;">
-      <div style="flex: 1 1 600px; min-width: 320px;">
-        <label>Bounding box (draw rectangle on map, or enter manually)</label>
-        <div id="map"></div>
+    <div class="hero">
+      <div class="hero-text">
+        Generates the entire planet, splitting it into tiles processed sequentially.
+        Each tile runs as a separate child process so memory is reclaimed between tiles.
+        Pause / resume any time — the job is crash-safe and resumable on restart.
       </div>
-      <div style="flex: 1 1 320px; min-width: 280px; display: grid; gap: calc(var(--grid)*3); align-content: start;">
-        <div class="row">
-          <div><label>min_lat</label><input id="bb-min-lat" type="number" step="any" /></div>
-          <div><label>min_lng</label><input id="bb-min-lng" type="number" step="any" /></div>
-        </div>
-        <div class="row">
-          <div><label>max_lat</label><input id="bb-max-lat" type="number" step="any" /></div>
-          <div><label>max_lng</label><input id="bb-max-lng" type="number" step="any" /></div>
-        </div>
-        <div>
-          <label>Tile size (km) — <span id="tile-size-label">5</span></label>
-          <input id="tile-size" type="range" min="1" max="50" value="5" step="1" />
-        </div>
-        <div>
-          <label>Minecraft world folder (absolute path)</label>
-          <input id="world-path" type="text" style="width: 100%;" placeholder="/home/user/.minecraft/saves/MyWorld" />
-        </div>
-        <details>
-          <summary>Advanced settings</summary>
-          <div class="row" style="margin-top: 8px;">
+
+      <div class="quick">
+        <label>World folder
+          <input id="world-path" type="text" placeholder="(auto)" />
+        </label>
+        <label>Tile size (km) — <span id="tile-size-label">100</span>
+          <input id="tile-size" type="range" min="1" max="100" value="100" step="1" />
+        </label>
+      </div>
+
+      <button id="btn-create-world" class="primary huge">Сгенерировать весь мир</button>
+
+      <details>
+        <summary>Advanced (custom area, generation flags)</summary>
+        <div style="margin-top: 8px; display: grid; gap: calc(var(--grid)*3);">
+          <div>
+            <label>Bounding box (shift+drag on the map below to override)</label>
+            <div id="map"></div>
+          </div>
+          <div class="row">
+            <div><label>min_lat</label><input id="bb-min-lat" type="number" step="any" /></div>
+            <div><label>min_lng</label><input id="bb-min-lng" type="number" step="any" /></div>
+            <div><label>max_lat</label><input id="bb-max-lat" type="number" step="any" /></div>
+            <div><label>max_lng</label><input id="bb-max-lng" type="number" step="any" /></div>
+          </div>
+          <div class="row">
             <label><input id="opt-terrain" type="checkbox" /> terrain</label>
             <label><input id="opt-interior" type="checkbox" checked /> interiors</label>
             <label><input id="opt-roof" type="checkbox" checked /> roofs</label>
             <label><input id="opt-fillground" type="checkbox" /> fill ground</label>
             <label><input id="opt-landcover" type="checkbox" checked /> land cover</label>
-          </div>
-          <div class="row" style="margin-top: 8px;">
             <div><label>scale</label><input id="opt-scale" type="number" step="0.1" value="1" /></div>
           </div>
-        </details>
-        <button id="btn-create" class="primary">Create Job &amp; Backup World</button>
-        <div id="setup-err" class="err"></div>
-      </div>
+          <button id="btn-create-custom" class="primary">Create Job from Custom BBox</button>
+        </div>
+      </details>
+
+      <div id="setup-err" class="err"></div>
     </div>
+  </section>
+
+  <!-- Live map with the tile grid drawn over OSM. Always visible during a job. -->
+  <section id="progress-card" class="card hidden">
+    <h2>Live progress map</h2>
+    <div id="progress-map" style="height: 420px; border-radius: 4px; border: 1px solid var(--border);"></div>
   </section>
 
   <section id="control-card" class="card hidden">
@@ -220,11 +236,6 @@
     <div id="control-err" class="err"></div>
   </section>
 
-  <section id="progress-card" class="card hidden">
-    <h2>Tile Grid</h2>
-    <div id="tile-grid" class="grid-tiles"></div>
-  </section>
-
   <section id="stats-card" class="card hidden">
     <h2>Stats</h2>
     <div class="stats">
@@ -233,6 +244,7 @@
       <div><div class="lbl">Elapsed</div><div class="num" id="stat-elapsed">00:00:00</div></div>
       <div><div class="lbl">ETA</div><div class="num" id="stat-eta">—</div></div>
       <div><div class="lbl">Failed</div><div class="num" id="stat-failed">0</div></div>
+      <div><div class="lbl">Current tile</div><div class="num" id="stat-current">—</div></div>
     </div>
   </section>
 
@@ -254,10 +266,19 @@
     document.documentElement.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
   });
 
-  // ---------- Map ----------
-  const map = L.map('map').setView([48.137, 11.575], 11);
+  // ---------- Defaults ----------
+  let DEFAULTS = {
+    default_world_path: '',
+    world_bbox: [-85, -180, 85, 180],
+    default_tile_size_km: 5,
+    default_world_tile_km: 100,
+    min_tile_size_km: 1, max_tile_size_km: 100,
+  };
+
+  // ---------- Setup map (Advanced bbox picker) ----------
+  const map = L.map('map', { worldCopyJump: true, minZoom: 1 }).setView([20, 0], 2);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19, attribution: '© OpenStreetMap'
+    maxZoom: 18, attribution: '© OpenStreetMap'
   }).addTo(map);
   let drawnRect = null;
   let dragStart = null;
@@ -268,8 +289,6 @@
     document.getElementById('bb-max-lat').value = b.max_lat.toFixed(6);
     document.getElementById('bb-max-lng').value = b.max_lng.toFixed(6);
   }
-
-  // Shift+drag to draw a rectangle.
   map.on('mousedown', (e) => {
     if (!e.originalEvent.shiftKey) return;
     map.dragging.disable();
@@ -294,17 +313,77 @@
       max_lng: bounds.getEast()
     });
   });
-  // Hint to user
   L.control({position: 'topright'}).onAdd = function() {
-    const div = L.DomUtil.create('div');
-    div.style.background = 'rgba(0,0,0,0.55)';
-    div.style.color = '#fff';
-    div.style.padding = '4px 8px';
-    div.style.fontSize = '11px';
-    div.style.borderRadius = '4px';
+    const div = L.DomUtil.create('div', 'map-overlay');
     div.innerText = 'shift+drag to select bbox';
     return div;
   };
+
+  // ---------- Progress map (live tile grid) ----------
+  let progressMap = null;
+  let progressLayer = null;
+  // tile_id -> Leaflet rectangle layer
+  const tileLayers = new Map();
+
+  function ensureProgressMap() {
+    if (progressMap) return progressMap;
+    progressMap = L.map('progress-map', { worldCopyJump: true, minZoom: 1 }).setView([20, 0], 2);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 18, attribution: '© OpenStreetMap'
+    }).addTo(progressMap);
+    progressLayer = L.layerGroup().addTo(progressMap);
+    return progressMap;
+  }
+
+  function styleForStatus(status) {
+    switch (status) {
+      case 'running':  return { color: '#ffffff', weight: 1.4, fillColor: '#4f8af5', fillOpacity: 0.7 };
+      case 'done':     return { color: '#1c5a3e', weight: 0.5, fillColor: '#4cb78a', fillOpacity: 0.55 };
+      case 'failed':   return { color: '#6b1e1e', weight: 0.6, fillColor: '#e16060', fillOpacity: 0.7 };
+      case 'canceled': return { color: '#444',    weight: 0.4, fillColor: '#1a1c20', fillOpacity: 0.4 };
+      case 'pending':
+      default:         return { color: '#666',    weight: 0.4, fillColor: '#2c313a', fillOpacity: 0.18 };
+    }
+  }
+
+  function drawTilesOnProgressMap(tiles) {
+    ensureProgressMap();
+    progressLayer.clearLayers();
+    tileLayers.clear();
+    if (!tiles || tiles.length === 0) return;
+    const allBounds = [];
+    for (const t of tiles) {
+      const bounds = [[t.task.bbox.min_lat, t.task.bbox.min_lng],
+                      [t.task.bbox.max_lat, t.task.bbox.max_lng]];
+      allBounds.push(bounds);
+      const rect = L.rectangle(bounds, styleForStatus(t.status));
+      rect.bindTooltip(`${t.task.id}\n${t.status}` + (t.error ? `\n${t.error}` : ''),
+                       { sticky: true });
+      rect.addTo(progressLayer);
+      tileLayers.set(t.task.id, rect);
+    }
+    // Fit map bounds to cover all tiles, but only on the first render so we
+    // don't fight the user's zooming during a job.
+    if (allBounds.length && !progressMap._fitOnce) {
+      const merged = L.latLngBounds(allBounds.flat());
+      progressMap.fitBounds(merged, { padding: [10, 10] });
+      progressMap._fitOnce = true;
+    }
+  }
+
+  function updateTileStatusOnMap(tileId, status, errorMsg) {
+    const layer = tileLayers.get(tileId);
+    if (!layer) return;
+    layer.setStyle(styleForStatus(status));
+    if (errorMsg) {
+      layer.setTooltipContent(`${tileId}\n${status}\n${errorMsg}`);
+    } else {
+      layer.setTooltipContent(`${tileId}\n${status}`);
+    }
+    if (status === 'running') {
+      progressMap.flyToBounds(layer.getBounds(), { duration: 0.6, maxZoom: 6 });
+    }
+  }
 
   // ---------- Tile size slider ----------
   const tileSize = document.getElementById('tile-size');
@@ -348,57 +427,31 @@
     if (!m) {
       setBadge('pending');
       document.getElementById('setup-card').classList.remove('hidden');
-      document.getElementById('control-card').classList.add('hidden');
       document.getElementById('progress-card').classList.add('hidden');
+      document.getElementById('control-card').classList.add('hidden');
       document.getElementById('stats-card').classList.add('hidden');
       document.getElementById('log-card').classList.add('hidden');
       return;
     }
     setBadge(m.status);
     const isTerminal = m.status === 'done' || m.status === 'canceled' || m.status === 'failed';
-    document.getElementById('setup-card').classList.toggle('hidden', !isTerminal && m.status !== 'pending' ? true : false);
-    if (isTerminal) document.getElementById('setup-card').classList.remove('hidden');
-    document.getElementById('control-card').classList.remove('hidden');
+    document.getElementById('setup-card').classList.toggle('hidden', !isTerminal);
     document.getElementById('progress-card').classList.remove('hidden');
+    document.getElementById('control-card').classList.remove('hidden');
     document.getElementById('stats-card').classList.remove('hidden');
     document.getElementById('log-card').classList.remove('hidden');
 
-    // Buttons
     document.getElementById('btn-start').disabled  = m.status === 'running' || m.status === 'paused';
     document.getElementById('btn-pause').disabled  = m.status !== 'running';
     document.getElementById('btn-resume').disabled = m.status !== 'paused';
     document.getElementById('btn-cancel').disabled = m.status !== 'running' && m.status !== 'paused';
     document.getElementById('btn-restore').disabled = m.status === 'running' || !m.backup_path;
 
-    renderTiles(m);
+    drawTilesOnProgressMap(m.tiles);
     renderStats(m);
     if (m.started_at) jobStartMs = m.started_at * 1000;
-  }
-
-  function renderTiles(m) {
-    const grid = document.getElementById('tile-grid');
-    const rows = m.tiles.reduce((a, t) => Math.max(a, t.task.row), 0) + 1;
-    const cols = m.tiles.reduce((a, t) => Math.max(a, t.task.col), 0) + 1;
-    grid.style.gridTemplateColumns = `repeat(${cols}, 14px)`;
-    grid.innerHTML = '';
-    // Place by row/col
-    const byRC = new Map(m.tiles.map(t => [`${t.task.row}/${t.task.col}`, t]));
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const t = byRC.get(`${r}/${c}`);
-        const div = document.createElement('div');
-        div.className = 'tile';
-        if (t) {
-          div.dataset.status = t.status;
-          const dur = (t.started_at && t.finished_at) ? (t.finished_at - t.started_at) : '—';
-          const bb = t.task.bbox;
-          div.dataset.tooltip = `${t.task.id}\n${t.status}\nbbox: ${bb.min_lat.toFixed(4)},${bb.min_lng.toFixed(4)},${bb.max_lat.toFixed(4)},${bb.max_lng.toFixed(4)}\nduration: ${dur}s${t.error ? `\nerror: ${t.error}` : ''}`;
-        } else {
-          div.dataset.status = 'canceled';
-        }
-        grid.appendChild(div);
-      }
-    }
+    // Resize the progress map after card becomes visible so Leaflet recalculates tile dims.
+    setTimeout(() => { if (progressMap) progressMap.invalidateSize(); }, 50);
   }
 
   function renderStats(m) {
@@ -408,7 +461,6 @@
     const pct = m.total ? Math.round((m.done / m.total) * 100) : 0;
     document.getElementById('stat-pct').innerText = pct + '%';
     document.getElementById('stat-progress').value = pct;
-    // Elapsed + ETA
     if (jobStartMs) {
       const elapsed = (Date.now() - jobStartMs) / 1000;
       document.getElementById('stat-elapsed').innerText = fmtDuration(elapsed);
@@ -416,9 +468,10 @@
       const avg = m.done > 0 ? elapsed / m.done : null;
       document.getElementById('stat-eta').innerText = avg ? fmtDuration(avg * remaining) : '—';
     }
+    const running = m.tiles.find(t => t.status === 'running');
+    document.getElementById('stat-current').innerText = running ? running.task.id : '—';
   }
 
-  // Update elapsed every second.
   setInterval(() => { if (manifest) renderStats(manifest); }, 1000);
 
   // ---------- Logs ----------
@@ -445,14 +498,31 @@
           appendLog(msg.data.line);
           break;
         case 'tile_start':
+          if (manifest) {
+            const t = manifest.tiles[msg.data.index];
+            if (t) updateTileStatusOnMap(t.task.id, 'running');
+          }
+          refreshAll();
+          break;
         case 'tile_done':
+          if (manifest) {
+            const t = manifest.tiles[msg.data.index];
+            if (t) updateTileStatusOnMap(t.task.id, 'done');
+          }
+          refreshAll();
+          break;
         case 'tile_failed':
+          if (manifest) {
+            const t = manifest.tiles[msg.data.index];
+            if (t) updateTileStatusOnMap(t.task.id, 'failed', msg.data.error);
+          }
+          refreshAll();
+          break;
         case 'job_paused':
         case 'job_resumed':
         case 'job_done':
         case 'job_canceled':
         case 'job_started':
-          // Re-fetch full manifest for authoritative state.
           refreshAll();
           break;
       }
@@ -481,26 +551,43 @@
     return [v('bb-min-lat'), v('bb-min-lng'), v('bb-max-lat'), v('bb-max-lng')];
   }
 
-  document.getElementById('btn-create').addEventListener('click', async () => {
-    const errEl = document.getElementById('setup-err');
-    errEl.textContent = '';
-    const bbox = readBboxInputs();
-    if (bbox.some(v => isNaN(v))) { errEl.textContent = 'Please set all four bbox values.'; return; }
-    const wp = document.getElementById('world-path').value.trim();
-    if (!wp) { errEl.textContent = 'Enter the world folder path.'; return; }
-
-    const settings = {
+  function readSettings() {
+    return {
       terrain:    document.getElementById('opt-terrain').checked,
       interior:   document.getElementById('opt-interior').checked,
       roof:       document.getElementById('opt-roof').checked,
       fillground: document.getElementById('opt-fillground').checked,
       land_cover: document.getElementById('opt-landcover').checked,
       scale:      parseFloat(document.getElementById('opt-scale').value) || 1.0,
-      bedrock:    false
+      bedrock:    false,
     };
+  }
+
+  document.getElementById('btn-create-world').addEventListener('click', async () => {
+    const errEl = document.getElementById('setup-err');
+    errEl.textContent = '';
+    const wp = (document.getElementById('world-path').value || DEFAULTS.default_world_path).trim();
     try {
       await api('/api/job/create', { method: 'POST', body: {
-        bbox, tile_size_km: parseFloat(tileSize.value), world_path: wp, settings
+        bbox: DEFAULTS.world_bbox,
+        tile_size_km: parseFloat(tileSize.value),
+        world_path: wp,
+        settings: readSettings()
+      }});
+      await api('/api/job/start', { method: 'POST' });
+      await refreshAll();
+    } catch (e) { errEl.textContent = e.message; }
+  });
+
+  document.getElementById('btn-create-custom').addEventListener('click', async () => {
+    const errEl = document.getElementById('setup-err');
+    errEl.textContent = '';
+    const bbox = readBboxInputs();
+    if (bbox.some(v => isNaN(v))) { errEl.textContent = 'Set all four bbox values (or shift+drag the map).'; return; }
+    const wp = (document.getElementById('world-path').value || DEFAULTS.default_world_path).trim();
+    try {
+      await api('/api/job/create', { method: 'POST', body: {
+        bbox, tile_size_km: parseFloat(tileSize.value), world_path: wp, settings: readSettings()
       }});
       await api('/api/job/start', { method: 'POST' });
       await refreshAll();
@@ -521,14 +608,27 @@
   controlBtn('btn-start',  '/api/job/start');
   controlBtn('btn-pause',  '/api/job/pause');
   controlBtn('btn-resume', '/api/job/resume');
-  controlBtn('btn-cancel', '/api/job/cancel', { confirm: 'Cancel the current job after the running tile finishes?' });
+  controlBtn('btn-cancel', '/api/job/cancel', { confirm: 'Cancel after the running tile finishes?' });
   controlBtn('btn-restore','/api/job/restore-backup',
              { confirm: 'Replace the world folder with its backup? This cannot be undone.' });
 
   // ---------- Init ----------
-  refreshAll();
-  refreshLogs();
-  connectWs();
+  (async () => {
+    try {
+      const d = await api('/api/defaults');
+      DEFAULTS = d;
+      document.getElementById('world-path').value = d.default_world_path || '';
+      document.getElementById('world-path').placeholder = d.default_world_path || '(auto)';
+      // Default tile slider to the larger world-tile value.
+      tileSize.value = String(d.default_world_tile_km || 100);
+      tileSizeLabel.innerText = tileSize.value;
+    } catch {}
+    await refreshAll();
+    await refreshLogs();
+    connectWs();
+    // Make sure both Leaflet maps render fully once their cards are visible.
+    setTimeout(() => { map.invalidateSize(); if (progressMap) progressMap.invalidateSize(); }, 100);
+  })();
 </script>
 </body>
 </html>

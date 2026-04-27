@@ -31,6 +31,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/job/status", get(api::job_status))
         .route("/api/job/tiles", get(api::job_tiles))
         .route("/api/logs", get(api::logs))
+        .route("/api/defaults", get(api::defaults))
         .route("/ws/events", get(ws::ws_handler))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state)

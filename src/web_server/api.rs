@@ -295,3 +295,21 @@ pub async fn job_tiles(State(state): State<Arc<AppState>>) -> Response {
 pub async fn logs(State(state): State<Arc<AppState>>) -> Response {
     Json(serde_json::json!({"lines": state.logs.snapshot()})).into_response()
 }
+
+/// Sensible defaults the admin panel uses to pre-fill its inputs so the user
+/// never has to type a path or bbox by hand. "Generate Entire World" mode
+/// uses `world_bbox` and `default_world_tile_km`; the regular preview map
+/// uses `default_tile_size_km`.
+pub async fn defaults() -> Response {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+    let default_path = cwd.join("arnis-world");
+    Json(serde_json::json!({
+        "default_world_path": default_path.display().to_string(),
+        "world_bbox": [-85.0_f64, -180.0_f64, 85.0_f64, 180.0_f64],
+        "default_tile_size_km": DEFAULT_TILE_SIZE_KM,
+        "default_world_tile_km": 100.0_f64,
+        "min_tile_size_km": MIN_TILE_SIZE_KM,
+        "max_tile_size_km": MAX_TILE_SIZE_KM
+    }))
+    .into_response()
+}
